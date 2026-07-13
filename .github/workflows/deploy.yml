@@ -1,0 +1,86 @@
+name: Build Docker Image with Native Commands
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  REPO_NAME: ${{ github.repository_owner }}
+  FRONTEND: frontend
+  TAG: ${{ github.sha }}
+
+jobs:
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Run Docker Build for frontend and backend
+        run: |
+          docker build ./frontend -t $REGISTRY/$REPO_NAME/$FRONTEND:$TAG
+          docker build ./backend -t $REGISTRY/$REPO_NAME/backend:$TAG
+          echo "Docker build completed successfully!"
+          docker images
+          docker push $REGISTRY/$REPO_NAME/$FRONTEND:$TAG
+          docker push $REGISTRY/$REPO_NAME/backend:$TAG
+
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > key.pem
+          chmod 600 key.pem
+
+      - name: Deploy to EC2
+        run: |
+          ssh -i key.pem -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
+
+            # Clean Docker
+            sudo docker system prune -af
+            sudo docker volume prune -f
+            
+            # Pull latest image
+            sudo docker pull $REGISTRY/$REPO_NAME/$FRONTEND:$TAG
+            sudo docker pull $REGISTRY/$REPO_NAME/backend:$TAG
+
+            # Stop and remove old container (ignore errors)
+            sudo docker rm -f frontend || true
+            sudo docker rm -f backend || true
+            
+            # Run new container
+            sudo docker run -d \
+              --name frontend \
+              -p 80:80 \
+              $REGISTRY/$REPO_NAME/$FRONTEND:$TAG
+
+            sudo docker run -d \
+              --name backend \
+              -p 8080:8080 \
+              $REGISTRY/$REPO_NAME/backend:$TAG
+
+            sudo docker ps -a
+            echo "Deployment completed successfully!"
+            sudo docker images
+          EOF
