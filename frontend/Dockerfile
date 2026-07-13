@@ -1,21 +1,13 @@
-# Stage 1 - Build Angular App
-FROM node:24 AS build
-
-WORKDIR /app
-
+FROM node:24-alpine AS build 
+WORKDIR /app 
 COPY package*.json ./
+RUN npm install 
+COPY . . 
+RUN npx ng build --configuration=development
 
-RUN npm install
 
-COPY . .
-
-RUN npm run build
-
-# Stage 2 - Serve using Nginx
 FROM nginx:alpine
-
-COPY --from=build /app/dist/angular-actions/browser /usr/share/nginx/html
-
+RUN rm -rf /usr/share/nginx/html/*
+COPY --from=build /app/dist/*/browser /usr/share/nginx/html
 EXPOSE 80
-
 CMD ["nginx", "-g", "daemon off;"]
